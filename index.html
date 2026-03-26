@@ -1,0 +1,1078 @@
+
+import { useState, useEffect, useRef } from "react";
+import {
+  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
+} from "recharts";
+
+// ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
+const T = {
+  bg0: "#02060f",
+  bg1: "#080f1e",
+  bg2: "#0e1a2e",
+  bg3: "#152238",
+  border: "#1e3050",
+  borderBright: "#2a4a78",
+  cyan: "#00c8ff",
+  cyanDim: "#0090bb",
+  green: "#00e5a0",
+  gold: "#f7b731",
+  red: "#ff4757",
+  purple: "#9b59b6",
+  text: "#cdd9ea",
+  textMuted: "#4d6b8a",
+  textBright: "#eef4ff",
+};
+
+// ─── ANTHROPIC API CALL ───────────────────────────────────────────────────────
+async function callClaude(prompt, systemPrompt = "") {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      system: systemPrompt || "You are the AI engine inside AI Business OS, a SaaS platform for small businesses. Be concise, business-focused, and practical. Format output clearly.",
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  const data = await res.json();
+  return data.content?.[0]?.text || "No response";
+}
+
+// ─── SHARED UI COMPONENTS ─────────────────────────────────────────────────────
+const Card = ({ children, style = {}, glow = false }) => (
+  <div style={{
+    background: T.bg2,
+    border: `1px solid ${glow ? T.borderBright : T.border}`,
+    borderRadius: 12,
+    padding: "20px 24px",
+    position: "relative",
+    boxShadow: glow ? `0 0 20px rgba(0,200,255,0.08)` : "none",
+    ...style
+  }}>
+    {children}
+  </div>
+);
+
+const Badge = ({ label, color = T.cyan }) => (
+  <span style={{
+    fontSize: 10, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase",
+    padding: "3px 8px", borderRadius: 4, border: `1px solid ${color}`,
+    color, background: `${color}15`
+  }}>{label}</span>
+);
+
+const PillBtn = ({ label, onClick, active = false, icon = null, color = T.cyan }) => (
+  <button onClick={onClick} style={{
+    background: active ? `${color}20` : "transparent",
+    border: `1px solid ${active ? color : T.border}`,
+    color: active ? color : T.textMuted,
+    borderRadius: 8, padding: "8px 16px", fontSize: 13, fontFamily: "inherit",
+    cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.2s",
+    fontWeight: active ? 600 : 400,
+  }}>
+    {icon && <span>{icon}</span>}
+    {label}
+  </button>
+);
+
+const Input = ({ placeholder, value, onChange, multiline = false, rows = 3 }) => {
+  const s = {
+    width: "100%", background: T.bg1, border: `1px solid ${T.border}`,
+    borderRadius: 8, padding: "10px 14px", color: T.text, fontSize: 13,
+    fontFamily: "inherit", outline: "none", boxSizing: "border-box", resize: "vertical",
+  };
+  return multiline
+    ? <textarea placeholder={placeholder} value={value} onChange={onChange} rows={rows} style={s} />
+    : <input placeholder={placeholder} value={value} onChange={onChange} style={s} />;
+};
+
+const AIButton = ({ label, onClick, loading }) => (
+  <button onClick={onClick} disabled={loading} style={{
+    background: loading ? T.bg3 : `linear-gradient(135deg, ${T.cyan}, #0066ff)`,
+    border: "none", borderRadius: 8, padding: "10px 20px",
+    color: loading ? T.textMuted : "#fff", fontSize: 13, fontWeight: 700,
+    fontFamily: "inherit", cursor: loading ? "not-allowed" : "pointer",
+    display: "flex", alignItems: "center", gap: 8, transition: "all 0.2s",
+    boxShadow: loading ? "none" : `0 4px 15px rgba(0,200,255,0.3)`,
+  }}>
+    {loading ? <><Spinner /><span>Generating...</span></> : <><span>⚡</span><span>{label}</span></>}
+  </button>
+);
+
+const Spinner = () => (
+  <span style={{
+    width: 14, height: 14, border: `2px solid ${T.textMuted}`,
+    borderTop: `2px solid ${T.cyan}`, borderRadius: "50%",
+    display: "inline-block", animation: "spin 0.8s linear infinite"
+  }} />
+);
+
+const StatCard = ({ label, value, change, color = T.cyan, icon }) => (
+  <Card style={{ flex: 1, minWidth: 160 }}>
+    <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
+    <div style={{ fontSize: 26, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    <div style={{ fontSize: 12, color: T.textMuted, marginTop: 2 }}>{label}</div>
+    {change && <div style={{ fontSize: 11, color: change > 0 ? T.green : T.red, marginTop: 4, fontWeight: 600 }}>
+      {change > 0 ? "▲" : "▼"} {Math.abs(change)}%
+    </div>}
+  </Card>
+);
+
+const SectionHeader = ({ title, sub, badge }) => (
+  <div style={{ marginBottom: 24 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: T.textBright, letterSpacing: -0.5 }}>{title}</h2>
+      {badge && <Badge label={badge} />}
+    </div>
+    {sub && <p style={{ margin: 0, fontSize: 13, color: T.textMuted }}>{sub}</p>}
+  </div>
+);
+
+const AIOutput = ({ text }) => (
+  text ? <div style={{
+    background: T.bg1, border: `1px solid ${T.borderBright}`,
+    borderRadius: 10, padding: 16, fontSize: 13, color: T.text,
+    lineHeight: 1.75, whiteSpace: "pre-wrap", marginTop: 16,
+    borderLeft: `3px solid ${T.cyan}`
+  }}>{text}</div> : null
+);
+
+// ─── MODULE 1: WEBSITE BUILDER ────────────────────────────────────────────────
+const WebsiteBuilder = () => {
+  const [form, setForm] = useState({ name: "", industry: "", services: "", audience: "", location: "" });
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState(0);
+
+  const generate = async () => {
+    setLoading(true);
+    const prompt = `Generate a complete website structure for this business:
+Business: ${form.name}
+Industry: ${form.industry}
+Services: ${form.services}
+Target Audience: ${form.audience}
+Location: ${form.location}
+
+Provide:
+1. Homepage Hero Section (headline + subheadline + CTA)
+2. Services Section (3 service cards with descriptions)
+3. About Page copy (2 paragraphs)
+4. SEO Meta Title & Description
+5. Contact Page CTA
+
+Keep it professional and conversion-focused.`;
+    const res = await callClaude(prompt);
+    setOutput(res);
+    setLoading(false);
+    setStep(1);
+  };
+
+  const fields = [
+    { key: "name", placeholder: "Business name (e.g. BrightSmile Dental)" },
+    { key: "industry", placeholder: "Industry (e.g. Healthcare, Real Estate, Legal)" },
+    { key: "services", placeholder: "Services offered (e.g. Teeth whitening, Implants, Checkups)" },
+    { key: "audience", placeholder: "Target audience (e.g. Adults 30-55 in suburban areas)" },
+    { key: "location", placeholder: "Location (e.g. Austin, TX)" },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="AI Website Builder" sub="Generate a full business website from a simple description" badge="Module 01" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <Card glow>
+          <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 16, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Business Details</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {fields.map(f => (
+              <Input key={f.key} placeholder={f.placeholder} value={form[f.key]}
+                onChange={e => setForm({ ...form, [f.key]: e.target.value })} />
+            ))}
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <AIButton label="Generate Website" onClick={generate} loading={loading} />
+          </div>
+        </Card>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {["Homepage", "Services", "About", "Contact"].map((page, i) => (
+            <div key={page} style={{
+              background: step > 0 ? T.bg2 : T.bg1,
+              border: `1px solid ${step > 0 ? T.borderBright : T.border}`,
+              borderRadius: 10, padding: "14px 18px",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              transition: "all 0.3s"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>{"🏠📋👤📞"[i]}</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.textBright }}>{page} Page</div>
+                  <div style={{ fontSize: 11, color: T.textMuted }}>Auto-generated content</div>
+                </div>
+              </div>
+              <Badge label={step > 0 ? "READY" : "PENDING"} color={step > 0 ? T.green : T.textMuted} />
+            </div>
+          ))}
+          <div style={{
+            background: T.bg1, border: `1px dashed ${T.border}`, borderRadius: 10,
+            padding: "14px 18px", textAlign: "center", fontSize: 12, color: T.textMuted
+          }}>
+            🚀 Deploy to Vercel with one click after generation
+          </div>
+        </div>
+      </div>
+      <AIOutput text={output} />
+    </div>
+  );
+};
+
+// ─── MODULE 2: MARKETING GENERATOR ───────────────────────────────────────────
+const MarketingGen = () => {
+  const [form, setForm] = useState({ product: "", audience: "", goal: "" });
+  const [activeType, setActiveType] = useState("ad");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const types = [
+    { id: "ad", label: "Ad Copy", icon: "📢" },
+    { id: "email", label: "Email Campaign", icon: "📧" },
+    { id: "social", label: "Social Posts", icon: "📱" },
+    { id: "landing", label: "Landing Page", icon: "🎯" },
+  ];
+
+  const generate = async () => {
+    setLoading(true);
+    const typeMap = { ad: "advertising copy (Google Ads + Facebook Ads)", email: "email marketing campaign (subject line + body)", social: "3 social media posts (LinkedIn, Twitter, Instagram)", landing: "landing page copy (headline, benefits, CTA, social proof)" };
+    const prompt = `Create ${typeMap[activeType]} for:
+Product/Service: ${form.product}
+Target Audience: ${form.audience}
+Marketing Goal: ${form.goal}
+
+Make it compelling, conversion-focused, and platform-appropriate. Include specific hooks and CTAs.`;
+    const res = await callClaude(prompt, "You are a world-class digital marketing copywriter. Write persuasive, high-converting marketing copy. Be specific and actionable.");
+    setOutput(res);
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      <SectionHeader title="AI Marketing Generator" sub="Create high-converting campaigns across every channel" badge="Module 02" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {types.map(t => <PillBtn key={t.id} label={`${t.icon} ${t.label}`} active={activeType === t.id} onClick={() => { setActiveType(t.id); setOutput(""); }} />)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <Card glow>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Input placeholder="Product or service (e.g. AI Accounting Software)" value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} />
+            <Input placeholder="Target audience (e.g. Small business owners, 25-45)" value={form.audience} onChange={e => setForm({ ...form, audience: e.target.value })} />
+            <Input placeholder="Marketing goal (e.g. Drive free trial signups)" value={form.goal} onChange={e => setForm({ ...form, goal: e.target.value })} />
+            <AIButton label={`Generate ${types.find(t => t.id === activeType)?.label}`} onClick={generate} loading={loading} />
+          </div>
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Saved Campaigns</div>
+          {[
+            { name: "Q1 Product Launch", type: "Email", status: "Active" },
+            { name: "Google Ads - Spring", type: "Ad Copy", status: "Draft" },
+            { name: "LinkedIn Awareness", type: "Social", status: "Scheduled" },
+          ].map(c => (
+            <div key={c.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
+              <div>
+                <div style={{ fontSize: 13, color: T.text, fontWeight: 600 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: T.textMuted }}>{c.type}</div>
+              </div>
+              <Badge label={c.status} color={c.status === "Active" ? T.green : c.status === "Draft" ? T.gold : T.cyan} />
+            </div>
+          ))}
+        </Card>
+      </div>
+      <AIOutput text={output} />
+    </div>
+  );
+};
+
+// ─── MODULE 3: LEAD CAPTURE ───────────────────────────────────────────────────
+const LeadCapture = () => {
+  const [leads] = useState([
+    { id: 1, name: "Sarah Mitchell", email: "sarah@techcorp.com", company: "TechCorp", interest: "Enterprise", status: "Hot", score: 92, date: "Mar 14" },
+    { id: 2, name: "James Park", email: "jpark@startupxyz.io", company: "StartupXYZ", interest: "Growth Plan", status: "Warm", score: 74, date: "Mar 13" },
+    { id: 3, name: "Elena Rodriguez", email: "elena@designco.com", company: "DesignCo", interest: "Starter", status: "Cold", score: 45, date: "Mar 12" },
+    { id: 4, name: "Michael Chen", email: "mchen@retailplus.com", company: "RetailPlus", interest: "Agency Plan", status: "Hot", score: 88, date: "Mar 11" },
+    { id: 5, name: "Aisha Patel", email: "apatel@growthco.io", company: "GrowthCo", interest: "Growth Plan", status: "Warm", score: 67, date: "Mar 10" },
+  ]);
+  const [chatMsg, setChatMsg] = useState("");
+  const [chat, setChat] = useState([{ role: "bot", text: "Hi! I'm your AI assistant. How can I help your business today? 👋" }]);
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const sendChat = async () => {
+    if (!chatMsg.trim()) return;
+    const msg = chatMsg;
+    setChatMsg("");
+    setChat(c => [...c, { role: "user", text: msg }]);
+    setChatLoading(true);
+    const res = await callClaude(msg, "You are a helpful sales assistant chatbot for a business. Qualify leads by asking about their business needs, company size, and goals. Be friendly, concise, and professional. Keep responses under 80 words.");
+    setChat(c => [...c, { role: "bot", text: res }]);
+    setChatLoading(false);
+  };
+
+  const scoreColor = s => s >= 80 ? T.green : s >= 60 ? T.gold : T.red;
+
+  return (
+    <div>
+      <SectionHeader title="AI Lead Capture System" sub="Chatbot widgets, lead scoring, and pipeline automation" badge="Module 03" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20 }}>
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1 }}>Recent Leads</div>
+            <div style={{ display: "flex", gap: 12, fontSize: 13, color: T.textMuted }}>
+              <span>Total: <strong style={{ color: T.cyan }}>247</strong></span>
+              <span>This week: <strong style={{ color: T.green }}>+38</strong></span>
+            </div>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ color: T.textMuted, textAlign: "left" }}>
+                {["Name", "Company", "Interest", "Score", "Status", "Date"].map(h => (
+                  <th key={h} style={{ padding: "6px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map(l => (
+                <tr key={l.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                  <td style={{ padding: "10px 10px" }}>
+                    <div style={{ fontWeight: 600, color: T.textBright }}>{l.name}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted }}>{l.email}</div>
+                  </td>
+                  <td style={{ padding: "10px 10px", color: T.text }}>{l.company}</td>
+                  <td style={{ padding: "10px 10px", color: T.textMuted }}>{l.interest}</td>
+                  <td style={{ padding: "10px 10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 32, height: 4, background: T.bg1, borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${l.score}%`, height: "100%", background: scoreColor(l.score), borderRadius: 2 }} />
+                      </div>
+                      <span style={{ color: scoreColor(l.score), fontWeight: 700 }}>{l.score}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "10px 10px" }}><Badge label={l.status} color={l.status === "Hot" ? T.red : l.status === "Warm" ? T.gold : T.textMuted} /></td>
+                  <td style={{ padding: "10px 10px", color: T.textMuted, fontSize: 12 }}>{l.date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card glow style={{ display: "flex", flexDirection: "column", height: 420 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: T.cyan, marginBottom: 12 }}>🤖 Live Chatbot Preview</div>
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+            {chat.map((m, i) => (
+              <div key={i} style={{
+                alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                background: m.role === "user" ? `${T.cyan}20` : T.bg1,
+                border: `1px solid ${m.role === "user" ? T.cyanDim : T.border}`,
+                borderRadius: 10, padding: "8px 12px", fontSize: 12, color: T.text,
+                maxWidth: "85%", lineHeight: 1.5
+              }}>{m.text}</div>
+            ))}
+            {chatLoading && <div style={{ alignSelf: "flex-start", background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 12px", fontSize: 12, color: T.textMuted }}>typing...</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input placeholder="Type a message..." value={chatMsg} onChange={e => setChatMsg(e.target.value)} />
+            <button onClick={sendChat} style={{ background: T.cyan, border: "none", borderRadius: 8, padding: "0 14px", color: T.bg0, fontWeight: 700, cursor: "pointer", fontSize: 16 }}>→</button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 4: CRM DASHBOARD ──────────────────────────────────────────────────
+const CRMDashboard = () => {
+  const stages = [
+    { label: "New Leads", color: T.cyan, count: 24, value: 48000 },
+    { label: "Qualified", color: T.purple, count: 18, value: 72000 },
+    { label: "Proposal", color: T.gold, count: 11, value: 88000 },
+    { label: "Negotiation", color: "#ff6b35", count: 7, value: 63000 },
+    { label: "Closed Won", color: T.green, count: 4, value: 52000 },
+  ];
+
+  const deals = [
+    { name: "TechCorp Enterprise", stage: "Negotiation", value: 18000, owner: "AI", days: 12 },
+    { name: "RetailPlus Platform", stage: "Proposal", value: 9600, owner: "AI", days: 5 },
+    { name: "GrowthCo Suite", stage: "Qualified", value: 5880, owner: "AI", days: 18 },
+    { name: "StartupXYZ Growth", stage: "New Leads", value: 3528, owner: "AI", days: 2 },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="AI CRM Dashboard" sub="Full pipeline management, deal tracking, and follow-ups" badge="Module 04" />
+      <div style={{ overflowX: "auto", marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 12, minWidth: 800 }}>
+          {stages.map(s => (
+            <div key={s.label} style={{ flex: 1, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ background: `${s.color}20`, borderBottom: `2px solid ${s.color}`, padding: "10px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: 0.8 }}>{s.label}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: T.textBright, marginTop: 2 }}>{s.count}</div>
+                <div style={{ fontSize: 11, color: T.textMuted }}>${(s.value / 1000).toFixed(0)}k pipeline</div>
+              </div>
+              <div style={{ padding: 8 }}>
+                {[...Array(Math.min(s.count, 3))].map((_, i) => (
+                  <div key={i} style={{ background: T.bg1, borderRadius: 6, padding: "6px 8px", marginBottom: 4, fontSize: 11, color: T.textMuted }}>
+                    <div style={{ width: `${60 + i * 15}%`, height: 6, background: T.border, borderRadius: 3, marginBottom: 3 }} />
+                    <div style={{ width: `${40 + i * 10}%`, height: 4, background: `${s.color}30`, borderRadius: 2 }} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <Card>
+        <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 12 }}>Active Deals</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ color: T.textMuted }}>
+              {["Deal", "Stage", "Value", "AI Owner", "Days Active"].map(h => (
+                <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {deals.map((d, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${T.border}` }}>
+                <td style={{ padding: "12px 10px", fontWeight: 600, color: T.textBright }}>{d.name}</td>
+                <td style={{ padding: "12px 10px" }}><Badge label={d.stage} color={stages.find(s => s.label === d.stage)?.color || T.cyan} /></td>
+                <td style={{ padding: "12px 10px", color: T.green, fontWeight: 700 }}>${d.value.toLocaleString()}</td>
+                <td style={{ padding: "12px 10px" }}><Badge label="🤖 AI" color={T.cyan} /></td>
+                <td style={{ padding: "12px 10px", color: T.textMuted }}>{d.days}d</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+};
+
+// ─── MODULE 5: EMAIL AUTOMATION ───────────────────────────────────────────────
+const EmailAutomation = () => {
+  const [seq, setSeq] = useState([
+    { day: 1, type: "Welcome", subject: "Welcome to [Business] — Let's get started!", status: "active", opens: "68%" },
+    { day: 3, type: "Educational", subject: "3 ways [Business] can save you 10 hours/week", status: "active", opens: "52%" },
+    { day: 5, type: "Product Offer", subject: "Special offer inside — just for you 🎁", status: "active", opens: "41%" },
+    { day: 7, type: "Meeting Invite", subject: "Quick call? I have something interesting to share", status: "active", opens: "38%" },
+    { day: 14, type: "Re-engage", subject: "Still interested? Here's what others are saying...", status: "draft", opens: "—" },
+  ]);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [emailOutput, setEmailOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const generateEmail = async (email) => {
+    setLoading(true);
+    setSelectedDay(email.day);
+    const prompt = `Write a ${email.type} email for a SaaS business automation platform.
+Subject: ${email.subject}
+Sequence Day: ${email.day}
+
+Write a short, high-converting email (150-200 words). Include: greeting, main message, value proposition, and a clear CTA. Use personalization placeholders like [First Name] and [Business Name].`;
+    const res = await callClaude(prompt, "You are an expert email marketing strategist. Write conversational, high-converting SaaS emails. Be concise and human.");
+    setEmailOutput(res);
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      <SectionHeader title="AI Email Automation" sub="Automated sequences triggered by lead behavior" badge="Module 05" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Email Sequence — Triggered on Lead Capture</div>
+          {seq.map((e, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, paddingBottom: 16, position: "relative" }}>
+              {i < seq.length - 1 && <div style={{ position: "absolute", left: 16, top: 32, bottom: 0, width: 1, background: T.border }} />}
+              <div style={{
+                width: 32, height: 32, borderRadius: "50%", flexShrink: 0, zIndex: 1,
+                background: e.status === "active" ? `${T.cyan}20` : T.bg1,
+                border: `1px solid ${e.status === "active" ? T.cyan : T.border}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, fontWeight: 700, color: e.status === "active" ? T.cyan : T.textMuted
+              }}>D{e.day}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.textBright }}>{e.type}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{e.subject}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: T.textMuted }}>Opens: <strong style={{ color: T.gold }}>{e.opens}</strong></span>
+                    <button onClick={() => generateEmail(e)} style={{
+                      background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6,
+                      padding: "3px 8px", fontSize: 11, color: T.cyan, cursor: "pointer", fontFamily: "inherit"
+                    }}>Edit</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </Card>
+        <Card glow>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>
+            {selectedDay ? `Day ${selectedDay} Email Preview` : "Click an email to preview & edit"}
+          </div>
+          {loading && <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.textMuted, fontSize: 13 }}><Spinner /> Generating email...</div>}
+          {emailOutput && !loading && (
+            <div style={{ fontSize: 13, color: T.text, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{emailOutput}</div>
+          )}
+          {!selectedDay && !loading && (
+            <div style={{ textAlign: "center", padding: "40px 0", color: T.textMuted, fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📧</div>
+              Select an email from the sequence to preview and regenerate with AI
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 6: ANALYTICS ENGINE ───────────────────────────────────────────────
+const AnalyticsEngine = () => {
+  const visitors = [
+    { date: "Mar 8", visitors: 312, leads: 18, converted: 3 },
+    { date: "Mar 9", visitors: 428, leads: 24, converted: 5 },
+    { date: "Mar 10", visitors: 389, leads: 21, converted: 4 },
+    { date: "Mar 11", visitors: 512, leads: 35, converted: 7 },
+    { date: "Mar 12", visitors: 478, leads: 29, converted: 6 },
+    { date: "Mar 13", visitors: 624, leads: 42, converted: 9 },
+    { date: "Mar 14", visitors: 718, leads: 51, converted: 12 },
+  ];
+
+  const channels = [
+    { name: "Organic", value: 38, color: T.green },
+    { name: "Paid", value: 27, color: T.cyan },
+    { name: "Referral", value: 19, color: T.gold },
+    { name: "Direct", value: 16, color: T.purple },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="Business Analytics Engine" sub="Real-time performance tracking and AI-powered insights" badge="Module 06" />
+      <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+        <StatCard label="Website Visitors" value="2,461" change={18} icon="👁️" color={T.cyan} />
+        <StatCard label="Leads Captured" value="220" change={32} icon="🎯" color={T.green} />
+        <StatCard label="Conversion Rate" value="8.9%" change={12} icon="📈" color={T.gold} />
+        <StatCard label="Pipeline Value" value="$323k" change={24} icon="💰" color={T.purple} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Traffic & Lead Trends</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={visitors}>
+              <defs>
+                <linearGradient id="gV" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={T.cyan} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={T.cyan} stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="gL" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={T.green} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={T.green} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="date" tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Area type="monotone" dataKey="visitors" stroke={T.cyan} fill="url(#gV)" strokeWidth={2} />
+              <Area type="monotone" dataKey="leads" stroke={T.green} fill="url(#gL)" strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Traffic Sources</div>
+          <PieChart width={180} height={140} style={{ margin: "0 auto" }}>
+            <Pie data={channels} cx={90} cy={70} innerRadius={40} outerRadius={65} dataKey="value" strokeWidth={0}>
+              {channels.map((c, i) => <Cell key={i} fill={c.color} />)}
+            </Pie>
+            <Tooltip contentStyle={{ background: T.bg2, border: `1px solid ${T.border}`, fontSize: 12 }} />
+          </PieChart>
+          <div style={{ marginTop: 8 }}>
+            {channels.map(c => (
+              <div key={c.name} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: c.color }} />
+                  <span style={{ color: T.text }}>{c.name}</span>
+                </div>
+                <span style={{ color: c.color, fontWeight: 700 }}>{c.value}%</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 7: CUSTOMER PORTAL ────────────────────────────────────────────────
+const CustomerPortal = () => {
+  const plans = [
+    { name: "Starter", price: 19, features: ["1 website", "100 leads/mo", "Basic CRM", "Email automation"], color: T.textMuted, current: false },
+    { name: "Growth", price: 49, features: ["5 websites", "1,000 leads/mo", "Full CRM", "Advanced automation", "Analytics"], color: T.cyan, current: true },
+    { name: "Agency", price: 99, features: ["Unlimited websites", "Unlimited leads", "Multi-client CRM", "White-label", "Priority support"], color: T.gold, current: false },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="Customer Portal" sub="Manage your subscription, settings, and integrations" badge="Module 07" />
+      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        {plans.map(p => (
+          <Card key={p.name} style={{ flex: 1 }} glow={p.current}>
+            {p.current && <div style={{ fontSize: 10, fontWeight: 700, color: T.cyan, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>✓ Current Plan</div>}
+            <div style={{ fontSize: 22, fontWeight: 800, color: p.color }}>${p.price}<span style={{ fontSize: 13, fontWeight: 400, color: T.textMuted }}>/mo</span></div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: T.textBright, marginBottom: 12 }}>{p.name}</div>
+            {p.features.map(f => <div key={f} style={{ fontSize: 12, color: T.text, padding: "3px 0", display: "flex", alignItems: "center", gap: 6 }}><span style={{ color: p.color }}>✓</span>{f}</div>)}
+            <button style={{
+              marginTop: 16, width: "100%", padding: "8px 0",
+              background: p.current ? "transparent" : `${p.color}20`,
+              border: `1px solid ${p.color}`, borderRadius: 8,
+              color: p.color, fontSize: 13, fontWeight: 600, cursor: p.current ? "default" : "pointer", fontFamily: "inherit"
+            }}>{p.current ? "Current Plan" : "Upgrade"}</button>
+          </Card>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>Integrations</div>
+          {[
+            { name: "Supabase", icon: "🗄️", status: "Connected" },
+            { name: "Gmail", icon: "📧", status: "Connected" },
+            { name: "Google Calendar", icon: "📅", status: "Connected" },
+            { name: "Zapier", icon: "⚡", status: "Connected" },
+            { name: "Notion", icon: "📓", status: "Setup Required" },
+            { name: "Vercel", icon: "▲", status: "Connected" },
+          ].map(i => (
+            <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 13, color: T.text }}>{i.icon} {i.name}</span>
+              <Badge label={i.status} color={i.status === "Connected" ? T.green : T.gold} />
+            </div>
+          ))}
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>Usage This Month</div>
+          {[
+            { label: "Leads captured", used: 418, limit: 1000, color: T.cyan },
+            { label: "Emails sent", used: 1240, limit: 5000, color: T.green },
+            { label: "AI generations", used: 67, limit: 200, color: T.gold },
+            { label: "Websites active", used: 2, limit: 5, color: T.purple },
+          ].map(u => (
+            <div key={u.label} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                <span style={{ color: T.text }}>{u.label}</span>
+                <span style={{ color: T.textMuted }}>{u.used} / {u.limit}</span>
+              </div>
+              <div style={{ height: 5, background: T.bg1, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${(u.used / u.limit) * 100}%`, height: "100%", background: u.color, borderRadius: 3 }} />
+              </div>
+            </div>
+          ))}
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 8: WORKFLOW BUILDER ───────────────────────────────────────────────
+const WorkflowBuilder = () => {
+  const nodes = [
+    { id: 1, type: "trigger", label: "Visitor Arrives", icon: "👋", color: T.cyan },
+    { id: 2, type: "action", label: "Chatbot Engages", icon: "🤖", color: T.purple },
+    { id: 3, type: "condition", label: "Lead Qualified?", icon: "❓", color: T.gold },
+    { id: 4, type: "action", label: "Capture Lead Data", icon: "📋", color: T.cyan },
+    { id: 5, type: "action", label: "Save to CRM", icon: "🗄️", color: T.green },
+    { id: 6, type: "action", label: "Trigger Email Sequence", icon: "📧", color: T.cyan },
+    { id: 7, type: "action", label: "Schedule Meeting", icon: "📅", color: T.gold },
+    { id: 8, type: "end", label: "Deal Opened", icon: "🎉", color: T.green },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="Automation Workflow Builder" sub="Visual no-code automation for your entire business" badge="Module 08" />
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 12 }}>Workflow Elements</div>
+          {[
+            { type: "Triggers", items: ["Page Visit", "Form Submit", "Email Open", "Calendar Event"] },
+            { type: "Actions", items: ["Send Email", "Add to CRM", "Start Sequence", "Notify Team"] },
+            { type: "Conditions", items: ["Lead Score ≥ 70", "Email Opened", "Deal Stage", "Time Delay"] },
+          ].map(g => (
+            <div key={g.type} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: T.textMuted, fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>{g.type}</div>
+              {g.items.map(item => (
+                <div key={item} style={{
+                  background: T.bg1, border: `1px solid ${T.border}`, borderRadius: 6,
+                  padding: "6px 10px", marginBottom: 4, fontSize: 12, color: T.text, cursor: "grab"
+                }}>{item}</div>
+              ))}
+            </div>
+          ))}
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Lead Capture → Deal Workflow</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
+            {nodes.map((node, i) => (
+              <div key={node.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  background: `${node.color}15`, border: `1px solid ${node.color}`,
+                  borderRadius: 10, padding: "10px 20px", minWidth: 220,
+                  justifyContent: "center"
+                }}>
+                  <span style={{ fontSize: 18 }}>{node.icon}</span>
+                  <div>
+                    <div style={{ fontSize: 11, color: node.color, textTransform: "uppercase", fontWeight: 700, letterSpacing: 0.8 }}>{node.type}</div>
+                    <div style={{ fontSize: 13, color: T.textBright, fontWeight: 600 }}>{node.label}</div>
+                  </div>
+                </div>
+                {i < nodes.length - 1 && (
+                  <div style={{ width: 2, height: 20, background: T.border, position: "relative" }}>
+                    <div style={{ position: "absolute", bottom: 0, left: -4, width: 10, height: 10, borderRight: `2px solid ${T.border}`, borderBottom: `2px solid ${T.border}`, transform: "rotate(45deg)" }} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 9: GROWTH ENGINE ──────────────────────────────────────────────────
+const GrowthEngine = () => {
+  const referralData = [
+    { month: "Oct", referrals: 12, signups: 8 },
+    { month: "Nov", referrals: 18, signups: 13 },
+    { month: "Dec", referrals: 24, signups: 18 },
+    { month: "Jan", referrals: 31, signups: 25 },
+    { month: "Feb", referrals: 42, signups: 35 },
+    { month: "Mar", referrals: 58, signups: 47 },
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="Growth & Referral Engine" sub="Viral loops, affiliate programs, and growth automation" badge="Module 09" />
+      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        <StatCard label="Active Referrers" value="84" change={22} icon="🤝" color={T.green} />
+        <StatCard label="Referral Signups" value="47" change={34} icon="✨" color={T.cyan} />
+        <StatCard label="Affiliate Revenue" value="$2,340" change={28} icon="💸" color={T.gold} />
+        <StatCard label="Viral Coefficient" value="1.42" change={8} icon="📊" color={T.purple} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Referral Growth Trend</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={referralData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="month" tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} />
+              <Bar dataKey="referrals" fill={`${T.cyan}80`} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="signups" fill={T.green} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>Referral Programs</div>
+          {[
+            { name: "Friend Referral", reward: "$10 credit", conversions: 156 },
+            { name: "Agency Partner", reward: "30% commission", conversions: 48 },
+            { name: "Shareable Landing", reward: "Free month", conversions: 92 },
+          ].map(p => (
+            <div key={p.name} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: T.textBright }}>{p.name}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: T.gold }}>{p.reward}</span>
+                <span style={{ fontSize: 11, color: T.green }}>{p.conversions} conversions</span>
+              </div>
+            </div>
+          ))}
+          <div style={{ marginTop: 14, padding: "12px 14px", background: `${T.gold}10`, border: `1px solid ${T.gold}30`, borderRadius: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.gold, marginBottom: 4 }}>Your Referral Link</div>
+            <div style={{ fontSize: 11, color: T.textMuted, fontFamily: "monospace" }}>aibos.io/ref/USR-2847</div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── MODULE 10: AI OPTIMIZER ──────────────────────────────────────────────────
+const AIOptimizer = () => {
+  const [analysis, setAnalysis] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const runAnalysis = async () => {
+    setLoading(true);
+    const prompt = `Analyze this SaaS business performance data and provide 5 specific, actionable optimization recommendations:
+
+Metrics:
+- Website conversion rate: 8.9% (industry avg: 12%)
+- Email open rate: 42% (industry avg: 35%)  
+- Lead-to-customer rate: 18% (industry avg: 22%)
+- Churn rate: 4.2% monthly (target: <3%)
+- CAC: $187 (LTV: $780)
+- Average onboarding completion: 61%
+
+Provide recommendations in this format:
+1. [Priority Level] Area: Recommendation
+   - Specific action steps
+   - Expected impact
+
+Focus on quick wins (under 30 days) and strategic improvements.`;
+    const res = await callClaude(prompt, "You are a SaaS growth consultant with expertise in conversion optimization, retention, and product analytics. Be specific, data-driven, and actionable.");
+    setAnalysis(res);
+    setLoading(false);
+  };
+
+  const signals = [
+    { label: "Onboarding Drop-off at Step 3", severity: "high", impact: "+4.2% conversion" },
+    { label: "Email sequence day 5 low CTR (2.1%)", severity: "medium", impact: "+$12k pipeline" },
+    { label: "Mobile chatbot abandonment 68%", severity: "high", impact: "+31 leads/mo" },
+    { label: "Trial → Paid conversion below benchmark", severity: "medium", impact: "+8% revenue" },
+    { label: "Agency plan underpriced vs. market", severity: "low", impact: "+$890/mo" },
+  ];
+
+  const severityColor = s => s === "high" ? T.red : s === "medium" ? T.gold : T.green;
+
+  return (
+    <div>
+      <SectionHeader title="AI Optimization Engine" sub="Continuous analysis and autonomous improvement suggestions" badge="Module 10" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>Detected Signals</div>
+          {signals.map((s, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${T.border}`, alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: severityColor(s.severity), marginTop: 4, flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: 13, color: T.text }}>{s.label}</div>
+                  <div style={{ fontSize: 11, color: severityColor(s.severity), marginTop: 2 }}>Est. impact: {s.impact}</div>
+                </div>
+              </div>
+              <Badge label={s.severity} color={severityColor(s.severity)} />
+            </div>
+          ))}
+        </Card>
+        <Card glow>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>AI Analysis Engine</div>
+          <div style={{ padding: "20px", background: T.bg1, borderRadius: 10, marginBottom: 16, textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>🧠</div>
+            <div style={{ fontSize: 13, color: T.text, marginBottom: 4 }}>Performance Intelligence</div>
+            <div style={{ fontSize: 11, color: T.textMuted }}>5 signals detected • Last scan: 2 min ago</div>
+          </div>
+          <AIButton label="Run Full AI Analysis" onClick={runAnalysis} loading={loading} />
+          <AIOutput text={analysis} />
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+// ─── OVERVIEW DASHBOARD ───────────────────────────────────────────────────────
+const Overview = ({ setModule }) => {
+  const modules = [
+    { id: "website", icon: "🏗️", label: "Website Builder", status: "2 Live Sites", color: T.cyan },
+    { id: "marketing", icon: "📢", label: "Marketing Generator", status: "3 Campaigns", color: T.purple },
+    { id: "leads", icon: "🎯", label: "Lead Capture", status: "247 Leads", color: T.green },
+    { id: "crm", icon: "📊", label: "CRM Dashboard", status: "$323k Pipeline", color: T.gold },
+    { id: "email", icon: "📧", label: "Email Automation", status: "4 Active Sequences", color: T.cyan },
+    { id: "analytics", icon: "📈", label: "Analytics Engine", status: "8.9% CVR", color: T.green },
+    { id: "portal", icon: "⚙️", label: "Customer Portal", status: "Growth Plan", color: T.textMuted },
+    { id: "workflow", icon: "⚡", label: "Workflow Builder", status: "1 Active Flow", color: T.gold },
+    { id: "growth", icon: "🚀", label: "Growth Engine", status: "47 Referrals", color: T.green },
+    { id: "optimizer", icon: "🧠", label: "AI Optimizer", status: "5 Signals", color: T.red },
+  ];
+
+  const revenueData = [
+    { month: "Sep", mrr: 4200 }, { month: "Oct", mrr: 5800 }, { month: "Nov", mrr: 7100 },
+    { month: "Dec", mrr: 8900 }, { month: "Jan", mrr: 11200 }, { month: "Feb", mrr: 14600 }, { month: "Mar", mrr: 18900 },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 26, fontWeight: 900, color: T.textBright, letterSpacing: -1, marginBottom: 4 }}>
+          Good morning, Fariha 👋
+        </div>
+        <div style={{ fontSize: 14, color: T.textMuted }}>Your AI Business OS is running. Here's your overview.</div>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
+        <StatCard label="Total Revenue" value="$18,900" change={29} icon="💰" color={T.green} />
+        <StatCard label="Active Users" value="847" change={15} icon="👥" color={T.cyan} />
+        <StatCard label="Leads This Week" value="51" change={38} icon="🎯" color={T.gold} />
+        <StatCard label="Automations Run" value="2,847" change={12} icon="⚡" color={T.purple} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20, marginBottom: 20 }}>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 16 }}>Monthly Recurring Revenue</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={revenueData}>
+              <defs>
+                <linearGradient id="gMRR" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={T.green} stopOpacity={0.4} />
+                  <stop offset="95%" stopColor={T.green} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="month" tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: T.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+              <Tooltip contentStyle={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, fontSize: 12 }} formatter={v => [`$${v.toLocaleString()}`, "MRR"]} />
+              <Area type="monotone" dataKey="mrr" stroke={T.green} fill="url(#gMRR)" strokeWidth={2.5} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 14 }}>Recent Activity</div>
+          {[
+            { text: "New lead captured: sarah@techcorp.com", time: "2m ago", icon: "🎯" },
+            { text: "Email sequence triggered for 3 leads", time: "15m ago", icon: "📧" },
+            { text: "Website 'BrightSmile Dental' deployed", time: "1h ago", icon: "🚀" },
+            { text: "CRM sync: 12 records updated", time: "2h ago", icon: "🔄" },
+            { text: "AI optimizer: new recommendation", time: "3h ago", icon: "🧠" },
+          ].map((a, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
+              <span>{a.icon}</span>
+              <div>
+                <div style={{ fontSize: 12, color: T.text }}>{a.text}</div>
+                <div style={{ fontSize: 10, color: T.textMuted, marginTop: 2 }}>{a.time}</div>
+              </div>
+            </div>
+          ))}
+        </Card>
+      </div>
+
+      <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: T.textMuted, marginBottom: 12 }}>All Modules</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+        {modules.map(m => (
+          <div key={m.id} onClick={() => setModule(m.id)} style={{
+            background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10,
+            padding: "14px 16px", cursor: "pointer", transition: "all 0.2s",
+            ":hover": { borderColor: m.color }
+          }} onMouseEnter={e => e.currentTarget.style.borderColor = m.color}
+            onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>{m.icon}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.textBright, marginBottom: 3 }}>{m.label}</div>
+            <div style={{ fontSize: 11, color: m.color }}>{m.status}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [module, setModule] = useState("overview");
+
+  const navItems = [
+    { id: "overview", icon: "⬡", label: "Overview" },
+    { id: "website", icon: "🏗️", label: "Website Builder" },
+    { id: "marketing", icon: "📢", label: "Marketing" },
+    { id: "leads", icon: "🎯", label: "Lead Capture" },
+    { id: "crm", icon: "📊", label: "CRM" },
+    { id: "email", icon: "📧", label: "Email Automation" },
+    { id: "analytics", icon: "📈", label: "Analytics" },
+    { id: "portal", icon: "⚙️", label: "Portal" },
+    { id: "workflow", icon: "⚡", label: "Workflows" },
+    { id: "growth", icon: "🚀", label: "Growth Engine" },
+    { id: "optimizer", icon: "🧠", label: "AI Optimizer" },
+  ];
+
+  const moduleMap = {
+    overview: <Overview setModule={setModule} />,
+    website: <WebsiteBuilder />,
+    marketing: <MarketingGen />,
+    leads: <LeadCapture />,
+    crm: <CRMDashboard />,
+    email: <EmailAutomation />,
+    analytics: <AnalyticsEngine />,
+    portal: <CustomerPortal />,
+    workflow: <WorkflowBuilder />,
+    growth: <GrowthEngine />,
+    optimizer: <AIOptimizer />,
+  };
+
+  return (
+    <>
+      <style>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; background: ${T.bg0}; font-family: 'SF Pro Display', -apple-system, 'Segoe UI', sans-serif; }
+        input::placeholder, textarea::placeholder { color: ${T.textMuted}; }
+        input:focus, textarea:focus { border-color: ${T.cyanDim} !important; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: ${T.bg1}; }
+        ::-webkit-scrollbar-thumb { background: ${T.border}; border-radius: 3px; }
+      `}</style>
+
+      <div style={{ display: "flex", height: "100vh", background: T.bg0, color: T.text }}>
+        {/* Sidebar */}
+        <div style={{
+          width: 220, background: T.bg1, borderRight: `1px solid ${T.border}`,
+          display: "flex", flexDirection: "column", flexShrink: 0
+        }}>
+          <div style={{ padding: "20px 16px 16px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: `linear-gradient(135deg, ${T.cyan}, #0044ff)`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 16, fontWeight: 900, color: "#fff"
+              }}>⬡</div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: T.textBright, letterSpacing: -0.3 }}>AI Business OS</div>
+                <div style={{ fontSize: 10, color: T.textMuted }}>Growth Plan</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.textMuted, letterSpacing: 1.2, textTransform: "uppercase", padding: "4px 8px 8px" }}>Platform</div>
+            {navItems.map(item => (
+              <div key={item.id} onClick={() => setModule(item.id)} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "8px 10px",
+                borderRadius: 8, cursor: "pointer", marginBottom: 2,
+                background: module === item.id ? `${T.cyan}15` : "transparent",
+                border: `1px solid ${module === item.id ? T.cyanDim : "transparent"}`,
+                transition: "all 0.15s",
+              }}
+                onMouseEnter={e => { if (module !== item.id) e.currentTarget.style.background = T.bg2; }}
+                onMouseLeave={e => { if (module !== item.id) e.currentTarget.style.background = "transparent"; }}>
+                <span style={{ fontSize: 14 }}>{item.icon}</span>
+                <span style={{ fontSize: 13, color: module === item.id ? T.cyan : T.text, fontWeight: module === item.id ? 600 : 400 }}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ padding: "12px 16px", borderTop: `1px solid ${T.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: `linear-gradient(135deg, ${T.cyan}, ${T.purple})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff" }}>F</div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.textBright }}>Fariha</div>
+                <div style={{ fontSize: 10, color: T.textMuted }}>Admin</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
+          <div style={{ maxWidth: 1100, animation: "fadeIn 0.3s ease" }} key={module}>
+            {moduleMap[module]}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
